@@ -1,0 +1,64 @@
+name: Build Xiaomi Mondrian Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core bc bison flex build-essential \
+            libssl-dev libelf-dev libdw-dev lz4 cpio zip python3 curl \
+            ccache dwarves gcc-aarch64-linux-gnu
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_sm8450 -b lineage-23.2 kernel
+
+      - name: Download AOSP Clang r563880c
+        run: |
+          mkdir clang
+          curl -L -o clang.tar.gz \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r563880c.tar.gz
+          tar -xzf clang.tar.gz -C clang
+
+      - name: Build kernel Image + dtbo
+        run: |
+          cd kernel
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+
+          ./scripts/kconfig/merge_config.sh -O out out/.config \
+            arch/arm64/configs/vendor/waipio_GKI.config \
+            arch/arm64/configs/vendor/xiaomi_GKI.config \
+            arch/arm64/configs/vendor/mondrian_GKI.config \
+            arch/arm64/configs/vendor/debugfs.config
+
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc)
+
+      - name: Package output
+        run: |
+          mkdir release
+          cp kernel/out/arch/arm64/boot/Image release/
+          find kernel/out -name "*.dtb" -o -name "*.dtbo" -exec cp {} release/ \;
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: mondrian-kernel-image
+          path: release/*
