@@ -22,16 +22,18 @@ jobs:
             libssl-dev libelf-dev libdw-dev lz4 cpio zip python3 curl \
             ccache dwarves gcc-aarch64-linux-gnu
 
-      - name: Clone kernel source
+      - name: Clone kernel sources (Kernel + Modules + Devicetrees)
         run: |
+          # Clone Kernel
           git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_sm8450 -b lineage-23.2 kernel
+          # Clone Modules vào đúng vị trí
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_sm8450-modules -b lineage-23.2 kernel/modules
+          # Clone Devicetrees vào đúng vị trí
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_sm8450-devicetrees -b lineage-23.2 kernel/arch/arm64/boot/dts/vendor
 
-      - name: Download AOSP Clang r563880c
+      - name: Download Clang Toolchain (AOSP Clang r536225)
         run: |
-          mkdir clang
-          curl -L -o clang.tar.gz \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r563880c.tar.gz
-          tar -xzf clang.tar.gz -C clang
+          git clone --depth=1 https://gitlab.com/reagans-clang/clang-r536225 clang
 
       - name: Build kernel Image + dtbo
         run: |
@@ -40,24 +42,36 @@ jobs:
           export ARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
 
+          # 1. Tạo gki_defconfig nền
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
+          # 2. Gộp cấu hình vendor Waipio + Mondrian
           ./scripts/kconfig/merge_config.sh -O out out/.config \
             arch/arm64/configs/vendor/waipio_GKI.config \
             arch/arm64/configs/vendor/xiaomi_GKI.config \
             arch/arm64/configs/vendor/mondrian_GKI.config \
             arch/arm64/configs/vendor/debugfs.config
 
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc)
+          # 3. Tiến hành biên dịch
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc --all)
 
       - name: Package output
         run: |
           mkdir release
-          cp kernel/out/arch/arm64/boot/Image release/
+          # Copy file Image / Image.gz
+          if [ -f kernel/out/arch/arm64/boot/Image ]; then
+            cp kernel/out/arch/arm64/boot/Image release/
+          fi
+          if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel/out/arch/arm64/boot/Image.gz release/
+          fi
+          
+          # Tìm và copy tất cả file dtb/dtbo
           find kernel/out -name "*.dtb" -o -name "*.dtbo" -exec cp {} release/ \;
 
-      - name: Upload
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mondrian-kernel-image
